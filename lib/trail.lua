@@ -3,7 +3,6 @@
  / / __/  |/ / __ `/ __ `__ \/ / __ `__ \/ __ `/ __/ _ \/ ___/
 / /_/ / /|  / /_/ / / / / / / / / / / / / /_/ / /_/  __(__  )
 \____/_/ |_/\__,_/_/ /_/ /_/_/_/ /_/ /_/\__,_/\__/\___/____]]
-local lib = {}
 local smears = {}
 
 local config = {
@@ -15,7 +14,7 @@ local white = textures["1x1white"] or textures:newTexture("1x1white",1,1):setPix
 -->====================[ API ]====================<--
 
 ---A trail type that is controlled by two world positions
----@class trail
+---@class Trail
 ---@field ID integer
 ---@field leadA Vector3
 ---@field leadB Vector3
@@ -27,16 +26,16 @@ local white = textures["1x1white"] or textures:newTexture("1x1white",1,1):setPix
 ---@field render_type ModelPart.renderType
 ---@field sprites_flipped table
 ---@field diverge number
-local trail = {}
-trail.__index = trail
+local Trail = {}
+Trail.__index = Trail
 
 local smearID = 0
 ---Creates a new Trail
 ---@param texture Texture?
----@return trail
-function lib:newTwoLeadTrail(texture)
-	---@type trail
-	local compose = {
+---@return Trail
+function Trail.new(texture)
+	---@type Trail
+	local self = {
 		ID = smearID,
 		leadA = nil,
 		leadB = nil,
@@ -50,10 +49,10 @@ function lib:newTwoLeadTrail(texture)
 		diverge = 1,
 	}
 	smearID = smearID + 1
-	setmetatable(compose,trail)
-	compose:rebuildSpriteTasks()
-	table.insert(smears,compose)
-	return compose
+	setmetatable(self,Trail)
+	self:rebuildSpriteTasks()
+	table.insert(smears,self)
+	return self
 end
 
 ---Sets the two points which the trail will follow  
@@ -61,13 +60,21 @@ end
 ---@param A Vector3
 ---@param B Vector3
 ---@param scale number|nil
----@return trail
-function trail:setLeads(A,B,scale)
+---@return Trail
+function Trail:setLeads(A,B,scale)
 	if not scale then scale = 1 end
 	self.leadA = A:copy()
 	self.leadB = B:copy()
 	self.lead_width = scale
 	self:update()
+	return self
+end
+
+function Trail:clear()
+	self.leadA = nil
+	self.leadB = nil
+	self.points = {}
+	self:rebuildSpriteTasks()
 	return self
 end
 
@@ -80,16 +87,16 @@ end
 --- 1.5 : grow halfway  
 --- 2 : grow  
 ---@param index number
----@return trail
-function trail:setDivergeness(index)
+---@return Trail
+function Trail:setDivergeness(index)
 	self.diverge = index
 	return self
 end
 
 ---Sets the duration of the trail, the duration is based on update ticks(not minecraft ticks).
 ---@param ticks integer
----@return trail
-function trail:setDuration(ticks)
+---@return Trail
+function Trail:setDuration(ticks)
 	self.duration = ticks
 	self:rebuildSpriteTasks()
 	return self
@@ -97,22 +104,22 @@ end
 
 ---Sets the render type of the smear.
 ---@param render_type ModelPart.renderType
----@return trail
-function trail:setRenderType(render_type)
+---@return Trail
+function Trail:setRenderType(render_type)
 	self.render_type = render_type
 	self:rebuildSpriteTasks()
 	return self
 end
 
 ---Deletes all the sprite tasks, must be called when discarding the object.
-function trail:delete()
+function Trail:free()
 	for _, t in pairs(self.sprites) do config.world:removeTask(t:getName()) end
 	for _, t in pairs(self.sprites_flipped) do config.world:removeTask(t:getName()) end
 end
 
 ---Rebuilds the sprite tasks.
----@return trail
-function trail:rebuildSpriteTasks()
+---@return Trail
+function Trail:rebuildSpriteTasks()
 	for _, t in pairs(self.sprites) do config.world:removeTask(t:getName()) end
 	for _, t in pairs(self.sprites_flipped) do config.world:removeTask(t:getName()) end
 	self.sprites = {}
@@ -135,8 +142,8 @@ function trail:rebuildSpriteTasks()
 end
 
 ---Updates the Trail Rendering
----@return trail
-function trail:update()
+---@return Trail
+function Trail:update()
 	if self.leadA and self.leadB then
 		table.insert(self.points,1,{self.leadA,self.leadB,self.lead_width})
 		while #self.points > self.duration do
@@ -171,4 +178,4 @@ function trail:update()
 	return self
 end
 
-return lib
+return Trail
