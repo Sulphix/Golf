@@ -15,9 +15,11 @@ local ball = {
 }
 local Trail = require"lib.trail"
 
-local trail = Trail.new()
+local trailX = Trail.new()
 :setDuration(60):setDivergeness(0)
-local trail2 = Trail.new()
+local trailY = Trail.new()
+:setDuration(60):setDivergeness(0)
+local trailZ = Trail.new()
 :setDuration(60):setDivergeness(0)
 
 
@@ -49,6 +51,7 @@ events.TICK:register(function ()
 	
 	local i = 1
 	local blocks = {}
+	local blocksRaw = {}
 	for z = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
 		for y = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
 			for x = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
@@ -58,12 +61,20 @@ events.TICK:register(function ()
 				if block:hasCollision() then
 					for key, value in pairs(block:getCollisionShape()) do
 						blocks[i] = {value[1] + bpos - cfg.RADIUS + cfg.MARGIN, value[2] + bpos + cfg.RADIUS - cfg.MARGIN}
+						blocksRaw[i] = {value[1] + bpos + cfg.MARGIN, value[2] + bpos - cfg.MARGIN}
 						i = i + 1
 					end
 				end
 			end
 		end
 	end
+	
+	--- 2nd layer of protection to make sure the ball never falls through the ground
+	local _, hit,face = raycast:aabb(ball.lpos, ball.pos+ball.vel, blocksRaw)
+	if face then
+		ball.pos = hit + cfg.MARGIN * side2dir[face]
+	end
+	
 	local _, hit,face = raycast:aabb(ball.lpos, ball.pos+ball.vel, blocks)
 	if face then
 		local norm = side2dir[face]
@@ -82,6 +93,7 @@ events.TICK:register(function ()
 	else
 		ball.vel = ball.vel + cfg.GRAVITY
 	end
+	
 	local block = world.getBlockState(ball.pos)
 	if #block:getFluidTags() > 0 then
 		if not ball.isUnderwater then
@@ -101,19 +113,21 @@ events.TICK:register(function ()
 	
 	
 end)
-
-cfg.MODEL_BALL.preRender = function (delta, context, part)
+function ball.update(delta)
 	local tpos = math.lerp(ball.lpos, ball.pos, delta)
 	ball.mat.c4 = vec(0,0,0,1)
-	ball.mat:rotateX(math.deg(ball.vel.z))
-	ball.mat:rotateZ(math.deg(-ball.vel.x))
+	local vel = ball.vel * 2
+	ball.mat:rotateX(math.deg(vel.z))
+	ball.mat:rotateZ(math.deg(-vel.x))
 	ball.mat.c4 = (tpos * 16):augmented(1)
 	
-	local dx = vec(0,1,0)
-	local dy = vec(1,0,0)
+	local dx = vec(1,0,0)
+	local dy = vec(0,1,0)
+	local dz = vec(0,0,1)
 	
-	trail:setLeads(tpos - dx, tpos + dx,cfg.RADIUS)
-	trail2:setLeads(tpos - dy, tpos + dy,cfg.RADIUS)
+	trailX:setLeads(tpos - dx, tpos + dx,cfg.RADIUS)
+	trailY:setLeads(tpos - dy, tpos + dy,cfg.RADIUS)
+	trailZ:setLeads(tpos - dz, tpos + dz,cfg.RADIUS)
 	cfg.MODEL_BALL:setMatrix(ball.mat:copy())
 	-- shadow
 	local sto = tpos + vec(0,-5,0)
