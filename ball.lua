@@ -38,6 +38,15 @@ local side2dir = {
    ["down"]  = vectors.vec3(0,-1,0),
 }
 
+local proxy_shape = {
+	["minecraft:moss_carpet"] = {
+		{
+			vec(0,-0.1,0),
+			vec(1,0,1),
+		}
+	}
+}
+
 
 events.ENTITY_INIT:register(function ()
 	ball.pos = player:getPos():add(0,1,1)
@@ -59,7 +68,7 @@ events.TICK:register(function ()
 				local bpos = ball.pos:floor() + offset
 				local block = world.getBlockState(bpos)
 				if block:hasCollision() then
-					for key, value in pairs(block:getCollisionShape()) do
+					for key, value in pairs(proxy_shape[block.id] or block:getCollisionShape()) do
 						blocks[i] = {value[1] + bpos - cfg.RADIUS + cfg.MARGIN, value[2] + bpos + cfg.RADIUS - cfg.MARGIN}
 						blocksRaw[i] = {value[1] + bpos + cfg.MARGIN, value[2] + bpos - cfg.MARGIN}
 						i = i + 1
@@ -69,10 +78,30 @@ events.TICK:register(function ()
 		end
 	end
 	
+	-- slopes
+	local support = world.getBlockState(ball.pos - vec(0,cfg.RADIUS+0.2,0))
+	if support.id:find("stairs") then
+		local force = side2dir[support.properties.facing] * vec(-1,0,1)
+		local shift = support.properties.shape:match("_(%w+)$")
+		if shift then
+			local perpendicular = force:cross(vec(0,1,0))
+			local len = force:length()
+			if shift == "left" then
+				force = vectors.rotateAroundAxis(135,force,vec(0,1,0))
+			else
+				force = vectors.rotateAroundAxis(45,force,vec(0,1,0))
+			end
+		end
+		ball.vel = ball.vel + force * 0.05
+	end
+	
 	--- 2nd layer of protection to make sure the ball never falls through the ground
 	local _, hit,face = raycast:aabb(ball.lpos, ball.pos+ball.vel, blocksRaw)
 	if face then
-		ball.pos = hit + cfg.MARGIN * side2dir[face]
+		local norm = side2dir[face]
+		local flat = (ball.vel - norm * ball.vel:dot(norm))
+		ball.pos = ball.lpos
+		ball.vel = flat * cfg.FRICTION
 	end
 	
 	local _, hit,face = raycast:aabb(ball.lpos, ball.pos+ball.vel, blocks)
@@ -112,7 +141,9 @@ events.TICK:register(function ()
 	end
 	
 	
+	
 end)
+
 function ball.update(delta)
 	local tpos = math.lerp(ball.lpos, ball.pos, delta)
 	ball.mat.c4 = vec(0,0,0,1)
