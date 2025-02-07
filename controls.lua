@@ -70,24 +70,17 @@ events.POST_WORLD_RENDER:register(function (dt)
 	if isThrown then
 		thrownTime = thrownTime + 1
 		renderer:setCameraPivot(math.lerp(cpos,math.lerp(ball.lpos,ball.pos,dt) - client:getCameraDir() * 2,math.min(thrownTime / 10,1)))
-		armVisibility = {
-			RIGHT_ARM = vanilla_model.RIGHT_ARM:getVisible(),
-			LEFT_ARM = vanilla_model.LEFT_ARM:getVisible(),
-		}
 		renderer:renderRightArm(false)
+		renderer:renderLeftArm(false)
 		renderer:setRenderHUD(false)
 	end
 	
 	if isThrown and ball.vel:length() < 0.02 then
 		isThrown = false
 		renderer:setCameraPivot()
-		renderer:renderRightArm(true)
+		renderer:renderLeftArm()
+		renderer:renderRightArm()
 		renderer:setRenderHUD(true)
-		
-		
-		for _, value in pairs(armVisibility) do
-			vanilla_model[key]:setVisible(value)
-		end
 	end
 	if isHighlghitingBall then
 		cfg.MODEL_BALL:setPrimaryRenderType("EMISSIVE_SOLID")
