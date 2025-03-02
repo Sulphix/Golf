@@ -86,38 +86,45 @@ events.ENTITY_INIT:register(function ()
 end)
 
 local windSoundCooldown = 0
-
+local blocks = {}
+local blocksRaw = {}
+local lbpos = vec(0,0,0)
 events.TICK:register(function ()
 	ball.lpos = ball.pos
 	ball.pos = ball.pos + ball.vel
 	
 	local i = 1
-	local blocks = {}
-	local blocksRaw = {}
-	for z = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
-		for y = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
-			for x = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
-				local offset = vec(x,y,z)
-				local bpos = ball.pos:floor() + offset
-				local block = world.getBlockState(bpos)
-				if block:hasCollision() then
-					local shape
-					for match, proxyShape in pairs(proxyShapes) do
-
-						if block.id:find(match) then
-							if type(proxyShape) == "function" then
-								shape = proxyShape(block,bpos)
-							else
-								shape = proxyShape
+	
+	local bpos = ball.pos:floor()
+	if bpos ~= lbpos then
+		lbpos = bpos
+		blocks = {}
+		blocksRaw = {}
+		for z = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
+			for y = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
+				for x = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
+					local offset = vec(x,y,z)
+					local cpos = bpos + offset
+					local block = world.getBlockState(cpos)
+					if block:hasCollision() then
+						local shape
+						for match, proxyShape in pairs(proxyShapes) do
+	
+							if block.id:find(match) then
+								if type(proxyShape) == "function" then
+									shape = proxyShape(block,cpos)
+								else
+									shape = proxyShape
+								end
 							end
 						end
-					end
-					shape = shape or block:getCollisionShape()
-					
-					for key, value in pairs(shape) do
-						blocks[i] = {value[1] + bpos - cfg.RADIUS + cfg.MARGIN, value[2] + bpos + cfg.RADIUS - cfg.MARGIN}
-						blocksRaw[i] = {value[1] + bpos + cfg.MARGIN, value[2] + bpos - cfg.MARGIN}
-						i = i + 1
+						shape = shape or block:getCollisionShape()
+						
+						for key, value in pairs(shape) do
+							blocks[i] = {value[1] + cpos - cfg.RADIUS + cfg.MARGIN, value[2] + cpos + cfg.RADIUS - cfg.MARGIN}
+							blocksRaw[i] = {value[1] + cpos + cfg.MARGIN, value[2] + cpos - cfg.MARGIN}
+							i = i + 1
+						end
 					end
 				end
 			end
@@ -144,9 +151,10 @@ events.TICK:register(function ()
 	--- Waxed Copper Trapdoors as fans
 	
 	for side, dir in pairs(side2dir) do
-		local block = raycast:block(ball.pos,ball.pos + dir * 5, "COLLIDER")
+		local _, hitPos = raycast:aabb(ball.pos,ball.pos + dir * 5,blocks)
+		local block = world.getBlockState(hitPos)
 		if block.id == "minecraft:waxed_copper_trapdoor" and (((side == "up" or side == "down") and "false" or "true") == block.properties.open) then
-			ball.vel = ball.vel - dir * 0.1
+			ball.vel = ball.vel * 0.9 - dir * 0.08
 			windSoundCooldown = windSoundCooldown - 1
 			if windSoundCooldown < 0 then
 				windSoundCooldown = 5

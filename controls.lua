@@ -53,10 +53,14 @@ key.use.release = function ()
 		pings.shoot(hit + vec(0,hit:length()*0.3,0))
 	end
 end
+
+cfg.MODEL_BALL.postRender = function (delta, context, part)
+	ball.update(delta)
+end
+
 events.POST_WORLD_RENDER:register(function (dt)
 	if not player:isLoaded() then return end
 	
-	ball.update(dt)
 	local cpos = player:getPos(dt):add(0,player:getEyeHeight())
 	local cdir = player:getLookDir()
 	local diff = (ball.pos-cpos)
