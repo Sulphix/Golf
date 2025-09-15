@@ -511,8 +511,26 @@ applyColor(colorIdx)      -- init UI + tint
 
 
 
+
 local myBallSpawn = myPage:newAction()
 myBallSpawn:setTitle("Spawn Ball")
 myBallSpawn:setItem("wind_charge")
 myBallSpawn:setOnLeftClick(pings.resetBallPos)
+
+
+-- Camera Follow Toggle Action
+local cameraFollowAction = myPage:newAction()
+cameraFollowAction:setTitle("Camera Follow")
+cameraFollowAction:setItem("minecraft:ender_eye")
+cameraFollowAction:setToggleItem("minecraft:ender_pearl")
+cameraFollowAction:setOnToggle(function(state)
+	pings.setCameraFollow(not state)
+	cameraFollowAction:setTitle(not state and "Camera: Follow" or "Camera: Free")
+	if state then
+		renderer:setCameraPivot()
+		renderer:renderLeftArm()
+		renderer:renderRightArm()
+		renderer:setRenderHUD(true)
+	end
+end)
 return ball
