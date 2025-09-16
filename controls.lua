@@ -39,16 +39,19 @@ local swingConfigs = {
 		power = 0.2,
 		heightMultiplier = 0.05,
 		name = "Putter",
+		maxSpeed = 1, -- Much more conservative for ground-level putting
 	}, --normal putter
 	chipper = {
 		power = 0.15,
 		heightMultiplier = 0.9,
 		name = "Chipper",
+		maxSpeed = 1.5, -- Reduced for better control
 	}, --high loft, low power
 	driver = {
 		power = 0.9,
 		heightMultiplier = 0.2,
 		name = "Driver",
+		maxSpeed = 4, -- Reduced to prevent physics issues
 	}, --low loft, high power
 }
 
@@ -73,7 +76,15 @@ key.use.release = function()
 	if isHighlghitingBall then
 		local config = swingConfigs[swingType]
 		local hit = ((ball.pos - dragPos) * config.power)
-		pings.shoot(hit + vec(0, hit:length() * config.heightMultiplier, 0))
+		local shotVel = hit + vec(0, hit:length() * config.heightMultiplier, 0)
+		
+		-- Apply max speed limit for this club
+		local shotSpeed = shotVel:length()
+		if shotSpeed > config.maxSpeed then
+			shotVel = shotVel * (config.maxSpeed / shotSpeed)
+		end
+		
+		pings.shoot(shotVel)
 	end
 end
 
@@ -101,6 +112,15 @@ events.POST_WORLD_RENDER:register(function(dt)
 	local cpos = player:getPos(dt):add(0, player:getEyeHeight())
 	local cdir = player:getLookDir()
 	local diff = (ball.pos - cpos)
+	
+	-- Cleanup: Respawn ball if it's over 1000 blocks away from player
+	local distanceToPlayer = diff:length()
+	if distanceToPlayer > 1000 then
+		pings.resetBallPos()
+		host:setActionbar("§6Ball respawned - too far from player!")
+		return -- Skip the rest of the frame processing
+	end
+	
 	if not key.use:isPressed() then
 		isHighlghitingBall = cdir:dot(diff:normalize()) > 0.998
 	else

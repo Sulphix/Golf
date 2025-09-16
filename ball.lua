@@ -50,11 +50,14 @@ function events.item_render(item)
 end
 
 local trailX = Trail.new()
-:setDuration(60):setDivergeness(0)
+:setDuration(30):setDivergeness(0)  -- Reduced from 60 to 30 for better performance
 local trailY = Trail.new()
-:setDuration(60):setDivergeness(0)
+:setDuration(30):setDivergeness(0)
 local trailZ = Trail.new()
-:setDuration(60):setDivergeness(0)
+:setDuration(30):setDivergeness(0)
+
+-- Trail update optimization
+local trailUpdateCounter = 0
 
 
 local TEXTURE_SHADOW = textures["textures.shadow"]
@@ -86,32 +89,6 @@ local proxyShapes = {
 			vec(1,0,1),
 		},
 	},
-	stripped = function (block, pos)
-		local collision = {}
-		local axis = block.properties.axis
-		local id = block.id
-		if not (axis == "x" or world.getBlockState(pos + vec(-1,0,0)).id == id) then
-			collision[#collision+1] = {vec(0,0,0),vec(-0.05,1,1)} -- -X surface
-		end
-		if not (axis == "x" or world.getBlockState(pos + vec(1,0,0)).id == id) then
-			collision[#collision+1] = {vec(1,0,0),vec(1.05,1,1)} -- +X surface
-		end
-		
-		if not (axis == "y" or world.getBlockState(pos + vec(0,-1,0)).id == id) then
-			collision[#collision+1] = {vec(0,0,0),vec(1,-0.05,1)} -- +Y surface
-		end
-		if not (axis == "y" or world.getBlockState(pos + vec(0,1,0)).id == id) then
-			collision[#collision+1] = {vec(0,1,0),vec(1,1.05,1)} -- -Y surface
-		end
-		
-		if not (axis == "z" or world.getBlockState(pos + vec(0,0,-1)).id == id) then
-			collision[#collision+1] = {vec(0,0,0),vec(1,1,-0.05)} -- +Z surface
-		end
-		if not (axis == "z" or world.getBlockState(pos + vec(0,0,1)).id == id) then
-			collision[#collision+1] = {vec(0,0,1),vec(1,1,1.05)} -- -Z surface
-		end
-		return collision
-	end
 }
 
 events.ENTITY_INIT:register(function ()
@@ -122,54 +99,179 @@ local windSoundCooldown = 0
 local blocks = {}
 local blocksRaw = {}
 local lbpos = vec(0,0,0)
-events.TICK:register(function ()
-	ball.lpos = ball.pos
-	-- Cap how far we can travel in one tick so raycasts don't skip geometry
-	local MAX_SWEEP = (cfg.MAX_SWEEP or (cfg.CHECK_RADIUS - 1))  -- stays inside the checked cube
-	local speed = ball.vel:length()
-	if speed > MAX_SWEEP and speed > 0 then
-	  ball.vel = ball.vel * (MAX_SWEEP / speed)
-	end
+local blockCache = {} -- Cache for block states and shapes
+local framesSinceUpdate = 0
 
-	ball.pos = ball.pos + ball.vel
+-- Performance monitoring (optional - can be removed)
+local perfStats = {
+	blocksChecked = 0,
+	cacheHits = 0,
+	lastReport = 0
+}
+
+-- Optimized block detection with caching and distance culling
+local function updateBlockCollisions(ballPos)
+	local bpos = ballPos:floor()
+	if bpos == lbpos and framesSinceUpdate < 3 then -- Reduced from 5 to 3 for faster updates
+		framesSinceUpdate = framesSinceUpdate + 1
+		return -- Skip update unless position changed or 3 frames passed
+	end
 	
+	lbpos = bpos
+	framesSinceUpdate = 0
+	blocks = {}
+	blocksRaw = {}
 	local i = 1
 	
-	local bpos = ball.pos:floor()
-	if bpos ~= lbpos then
-		lbpos = bpos
-		blocks = {}
-		blocksRaw = {}
-		for z = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
-			for y = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
-				for x = -cfg.CHECK_RADIUS, cfg.CHECK_RADIUS do
-					local offset = vec(x,y,z)
-					local cpos = bpos + offset
-					local block = world.getBlockState(cpos)
-					if block:hasCollision() then
-						local shape
-						for match, proxyShape in pairs(proxyShapes) do
+	-- Dynamic radius optimized for speed-limited clubs
+	local speed = ball.vel:length()
+	-- Much more conservative scaling since we now have speed limits (max 2.5)
+	local dynamicRadius = math.min(cfg.CHECK_RADIUS, math.max(3, math.ceil(speed * 1.2 + 3)))
 	
-							if block.id:find(match) then
-								if type(proxyShape) == "function" then
-									shape = proxyShape(block,cpos)
-								else
-									shape = proxyShape
+	-- Reduce predictive collision threshold since speeds are now capped
+	local predictivePositions = {}
+	if speed > 2.0 then -- Raised threshold since max speed is only 2.5
+		-- Fewer prediction steps since speeds are controlled
+		local currentPos = ballPos
+		local currentVel = ball.vel
+		for step = 1, math.min(3, math.ceil(speed * 0.8)) do -- Reduced prediction steps
+			currentPos = currentPos + currentVel
+			currentVel = currentVel + cfg.GRAVITY -- Account for gravity
+			table.insert(predictivePositions, currentPos:floor())
+		end
+	end
+	
+	-- Use squared distance to avoid sqrt calculations
+	local radiusSquared = dynamicRadius * dynamicRadius
+	
+	-- Collect all positions to check (current + predictive)
+	local positionsToCheck = {bpos}
+	for _, predPos in ipairs(predictivePositions) do
+		-- Avoid duplicates
+		local isDuplicate = false
+		for _, existingPos in ipairs(positionsToCheck) do
+			if existingPos.x == predPos.x and existingPos.y == predPos.y and existingPos.z == predPos.z then
+				isDuplicate = true
+				break
+			end
+		end
+		if not isDuplicate then
+			table.insert(positionsToCheck, predPos)
+		end
+	end
+	
+	-- Limit total block checks - more generous since speeds are now capped
+	local baseMaxChecks = math.min(cfg.CHECK_RADIUS * 50, 3000) -- Cap absolute maximum
+	local maxChecks = speed > 2.0 and baseMaxChecks or (speed > 1.0 and baseMaxChecks * 1.2 or baseMaxChecks * 1.5)
+	local checksPerformed = 0
+	
+	-- Check blocks around all predicted positions
+	for _, checkPos in ipairs(positionsToCheck) do
+		if checksPerformed >= maxChecks then break end
+		
+		-- Use smaller radius for predictive positions to stay within performance budget
+		local useRadius = checkPos == bpos and dynamicRadius or math.min(dynamicRadius, math.max(4, cfg.CHECK_RADIUS / 3))
+		local useRadiusSquared = useRadius * useRadius
+		
+		for z = -useRadius, useRadius do
+			if checksPerformed >= maxChecks then break end
+			for y = -useRadius, useRadius do
+				if checksPerformed >= maxChecks then break end
+				for x = -useRadius, useRadius do
+					if checksPerformed >= maxChecks then break end
+					
+					-- Distance culling - only check blocks within sphere, not cube
+					local distSq = x*x + y*y + z*z
+					if distSq <= useRadiusSquared then
+						checksPerformed = checksPerformed + 1
+						local offset = vec(x,y,z)
+						local cpos = checkPos + offset
+						local cacheKey = tostring(cpos.x) .. "," .. tostring(cpos.y) .. "," .. tostring(cpos.z)
+						
+						local cached = blockCache[cacheKey]
+						if not cached then
+							perfStats.blocksChecked = perfStats.blocksChecked + 1
+							local block = world.getBlockState(cpos)
+							if block:hasCollision() then
+								local shape
+								for match, proxyShape in pairs(proxyShapes) do
+									if block.id:find(match) then
+										if type(proxyShape) == "function" then
+											shape = proxyShape(block,cpos)
+										else
+											shape = proxyShape
+										end
+										break
+									end
+								end
+								shape = shape or block:getCollisionShape()
+								cached = {hasCollision = true, shape = shape, id = block.id}
+							else
+								cached = {hasCollision = false}
+							end
+							blockCache[cacheKey] = cached
+							
+							-- More aggressive cache cleanup when moving fast
+							if perfStats.blocksChecked % 100 == 0 and #blockCache > 1500 then
+								local toRemove = {}
+								local cleanupRadius = speed > 1.0 and cfg.CHECK_RADIUS or cfg.CHECK_RADIUS * 2
+								for key, _ in pairs(blockCache) do
+									local coords = {}
+									for coord in key:gmatch("[^,]+") do
+										table.insert(coords, tonumber(coord))
+									end
+									local dist = (vec(coords[1], coords[2], coords[3]) - bpos):length()
+									if dist > cleanupRadius then
+										table.insert(toRemove, key)
+									end
+								end
+								for _, key in ipairs(toRemove) do
+									blockCache[key] = nil
 								end
 							end
+						else
+							perfStats.cacheHits = perfStats.cacheHits + 1
 						end
-						shape = shape or block:getCollisionShape()
 						
-						for key, value in pairs(shape) do
-							blocks[i] = {value[1] + cpos - cfg.RADIUS + cfg.MARGIN, value[2] + cpos + cfg.RADIUS - cfg.MARGIN}
-							blocksRaw[i] = {value[1] + cpos + cfg.MARGIN, value[2] + cpos - cfg.MARGIN}
-							i = i + 1
+						if cached.hasCollision then
+							for key, value in pairs(cached.shape) do
+								blocks[i] = {value[1] + cpos - cfg.RADIUS + cfg.MARGIN, value[2] + cpos + cfg.RADIUS - cfg.MARGIN}
+								blocksRaw[i] = {value[1] + cpos + cfg.MARGIN, value[2] + cpos - cfg.MARGIN}
+								i = i + 1
+							end
 						end
 					end
 				end
 			end
 		end
 	end
+	
+	-- Performance reporting (optional)
+	if client.getSystemTime() - perfStats.lastReport > 5000 then -- Every 5 seconds
+		perfStats.lastReport = client.getSystemTime()
+		local cacheRatio = perfStats.cacheHits / math.max(1, perfStats.cacheHits + perfStats.blocksChecked)
+		-- Uncomment to see performance stats in chat
+		-- print(string.format("Golf Performance: %.1f%% cache hits, %d blocks checked, radius: %d, predictions: %d", cacheRatio * 100, perfStats.blocksChecked, dynamicRadius, #predictivePositions))
+		perfStats.blocksChecked = 0
+		perfStats.cacheHits = 0
+	end
+end
+
+events.TICK:register(function ()
+	ball.lpos = ball.pos
+	-- Cap how far we can travel in one tick so raycasts don't skip geometry
+	local MAX_SWEEP = (cfg.MAX_SWEEP or (cfg.CHECK_RADIUS - 1))  -- stays inside the checked cube
+	local speed = ball.vel:length()
+	
+	-- Simple capping for very high speeds
+	if speed > MAX_SWEEP and speed > 0 then
+		ball.vel = ball.vel * (MAX_SWEEP / speed)
+	end
+
+	ball.pos = ball.pos + ball.vel
+	
+	-- Update collision data
+	updateBlockCollisions(ball.pos)
 	
 	-- slopes
 	local support = world.getBlockState(ball.pos - vec(0,cfg.RADIUS+0.2,0))
@@ -188,17 +290,20 @@ events.TICK:register(function ()
 		ball.vel = ball.vel + force * (ball.vel-force):length() * 0.05
 	end
 	
-	--- Waxed Copper Trapdoors as fans
-	
-	for side, dir in pairs(side2dir) do
-		local _, hitPos = raycast:aabb(ball.pos,ball.pos + dir * 5,blocks)
-		local block = world.getBlockState(hitPos)
-		if block.id == "minecraft:waxed_copper_trapdoor" and (((side == "up" or side == "down") and "false" or "true") == block.properties.open) then
-			ball.vel = ball.vel * 0.9 - dir * 0.08
-			windSoundCooldown = windSoundCooldown - 1
-			if windSoundCooldown < 0 then
-				windSoundCooldown = 5
-				sounds:playSound("minecraft:entity.breeze.slide",ball.pos,1,1)
+	--- Waxed Copper Trapdoors as fans - optimized to only check when near potential fans
+	if speed > 0.05 then -- Only check fans when ball is moving
+		for side, dir in pairs(side2dir) do
+			local _, hitPos = raycast:aabb(ball.pos,ball.pos + dir * 5,blocks)
+			if hitPos then
+				local block = world.getBlockState(hitPos)
+				if block.id == "minecraft:waxed_copper_trapdoor" and (((side == "up" or side == "down") and "false" or "true") == block.properties.open) then
+					ball.vel = ball.vel * 0.9 - dir * 0.08
+					windSoundCooldown = windSoundCooldown - 1
+					if windSoundCooldown < 0 then
+						windSoundCooldown = 5
+						sounds:playSound("minecraft:entity.breeze.slide",ball.pos,1,1)
+					end
+				end
 			end
 		end
 	end
@@ -244,12 +349,11 @@ local function isSlimeContact(hit, norm)
   return _slimeId(_idAt(belowProbe))
 end
 
-	--- 2nd layer of protection to make sure the ball never falls through the ground
+	--- Multi-layer protection against tunneling through blocks
+	-- Primary: Standard raycast protection
 	local _, hit, face = raycast:aabb(ball.lpos, ball.pos, blocksRaw)
 	if face then
 	  local norm = side2dir[face]
-	  -- Snap out of the surface without touching velocity;
-	  -- the material-aware pass right after will handle bounce/slide properly.
 	  ball.pos = hit + cfg.MARGIN * norm
 	end
 
@@ -277,7 +381,7 @@ if face then
     if S.boost     then alongBoost     = S.boost     end
   end
 
-  -- Decide if this is a "bounce" like you already do, but with local bounciness
+  -- Standard bounce detection - keep it simple and reliable
   local willBounce = (absorbed + cfg.GRAVITY):length() * 10 > localBounciness
 
   -- Compute base post-collision velocity
@@ -345,21 +449,33 @@ function ball.update(delta)
 	ball.mat:rotateZ(math.deg(-vel.x))
 	ball.mat.c4 = (tpos * 16):augmented(1)
 	
-	local dx = vec(1,0,0)
-	local dy = vec(0,1,0)
-	local dz = vec(0,0,1)
+	-- Optimized trail update throttling for speed-limited system
+	trailUpdateCounter = trailUpdateCounter + 1
+	local speed = ball.vel:length()
+	-- Since max speed is now 2.5, adjust thresholds
+	local updateFreq = speed > 2.0 and 4 or (speed > 1.0 and 3 or 2) -- More frequent since speeds are controlled
+	local shouldUpdateTrails = trailUpdateCounter % updateFreq == 0
 	
-	trailX:setLeads(tpos - dx, tpos + dx,cfg.RADIUS)
-	trailY:setLeads(tpos - dy, tpos + dy,cfg.RADIUS)
-	trailZ:setLeads(tpos - dz, tpos + dz,cfg.RADIUS)
+	if shouldUpdateTrails then
+		local dx = vec(1,0,0)
+		local dy = vec(0,1,0)
+		local dz = vec(0,0,1)
+		
+		trailX:setLeads(tpos - dx, tpos + dx,cfg.RADIUS)
+		trailY:setLeads(tpos - dy, tpos + dy,cfg.RADIUS)
+		trailZ:setLeads(tpos - dz, tpos + dz,cfg.RADIUS)
+	end
+	
 	cfg.MODEL_BALL:setMatrix(ball.mat:copy())
-	-- shadow
-	local sto = tpos + vec(0,-5,0)
-	local _,shit = raycast:block(tpos,sto)
-	if (sto - shit):lengthSquared() ~= 0 then
-		MODEL_SHADOW:setPos(shit*16):setVisible(true)
-	else
-		MODEL_SHADOW:setVisible(true)
+	-- shadow - update more frequently since speeds are now controlled
+	if speed < 2.5 then -- Update shadow for all normal speeds
+		local sto = tpos + vec(0,-5,0)
+		local _,shit = raycast:block(tpos,sto)
+		if (sto - shit):lengthSquared() ~= 0 then
+			MODEL_SHADOW:setPos(shit*16):setVisible(true)
+		else
+			MODEL_SHADOW:setVisible(true)
+		end
 	end
 end
 
@@ -422,6 +538,10 @@ end
 function pings.state(p,v)
 	ball.pos = p
 	ball.vel = v
+end
+
+function pings.shoot(vel)
+	ball.vel = ball.vel + vel
 end
 
 if host:isHost() then

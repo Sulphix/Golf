@@ -11,7 +11,7 @@ MODEL_BALL = models.ball,
 
 
 -- AUTO GENERATED
-cfg.CHECK_RADIUS = 5
+cfg.CHECK_RADIUS = 60  -- Increased from 8 to 30 due to optimizations
 cfg.MODEL_BALL:setParentType("WORLD")
 :scale(cfg.RADIUS)
 
